@@ -17,7 +17,6 @@ FILES=("Qwen3.6-35B-A3B-UD-Q4_K_M.gguf" "mmproj-F16.gguf")
 # Sampling params per official model card (thinking mode, general tasks):
 #   temperature=1.0, top_p=0.95, top_k=20, presence_penalty=1.5
 DEFAULTS=(
-    --ctx-size 131072
     --n-predict 32768
     --n-gpu-layers 999
     --flash-attn on
@@ -28,4 +27,5 @@ DEFAULTS=(
     --reasoning on
     --reasoning-budget 4096
     --reasoning-budget-message $'\n\nOkay, I need to stop thinking and give my response now.\n'
+    --jinja
 )

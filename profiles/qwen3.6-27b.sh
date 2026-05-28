@@ -18,7 +18,6 @@ FILES=("Qwen3.6-27B-UD-Q4_K_XL.gguf" "mmproj-F16.gguf")
 # Official Qwen model card recommends presence_penalty=0.0 for thinking mode;
 # use `-- --presence-penalty 0.0` at run time for exact-model-card behaviour.
 DEFAULTS=(
-    -c 150000
     --n-predict 32768
     --n-gpu-layers 999
     --flash-attn on
@@ -28,4 +27,5 @@ DEFAULTS=(
     --top-p 0.95
     --presence-penalty 0.0
     --reasoning on
+    --jinja
 )

@@ -1,15 +1,16 @@
-# profiles/qwen3.6-27b-mtp.sh — Qwen 3.6 27B MTP (UD-Q4_K_XL, text-only)
+# profiles/qwen3.6-27b-mtp.sh — Qwen 3.6 27B MTP (UD-Q4_K_XL, vision)
 #
 # Dense 27B flagship with MTP (Multi-Token Prediction) support for ~1.4-2x
 # faster speculative decoding. Top agentic-coding performance at its weight
 # class. Hybrid reasoning model with thinking preservation.
-# Architecture: qwen35 | Max context: 262144 | Reasoning: yes | Vision: no
+# Architecture: qwen35 | Max context: 262144 | Reasoning: yes | Vision: yes
 #
-# Vision (--mmproj) is intentionally excluded: the MTP PR branch for llama.cpp
-# does not support --mmproj. Use profiles/qwen3.6-27b.sh for vision support.
+# Note: MTP + vision (--mmproj) may not work together depending on your llama.cpp
+# build. If you encounter errors, remove the mmproj from FILES or drop MTP flags.
 
 REPO="unsloth/Qwen3.6-27B-MTP-GGUF"
-FILES=("Qwen3.6-27B-UD-Q4_K_XL.gguf")
+FILES=("Qwen3.6-27B-UD-Q4_K_XL.gguf" "mmproj-BF16.gguf")
+TEMPLATE="qwen-fixed-chat-template.jinja"
 
 # Runtime defaults — native llama-server flags.
 # Baked into the image; overridable at `podman run` time via -- args.
@@ -38,4 +39,5 @@ DEFAULTS=(
     --reasoning on
     --spec-type draft-mtp
     --spec-draft-n-max 2
+    --jinja
 )

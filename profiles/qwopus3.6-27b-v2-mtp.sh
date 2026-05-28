@@ -36,4 +36,5 @@ DEFAULTS=(
     --reasoning on
     --spec-type draft-mtp
     --spec-draft-n-max 2
+    --jinja
 )
