@@ -38,7 +38,7 @@ set -euo pipefail
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 
-LLAMA_RELEASE="${LLAMA_RELEASE:-b9351}"
+LLAMA_RELEASE="${LLAMA_RELEASE:-b9536}"
 ROCM_VERSION="${ROCM_VERSION:-7.2}"
 ARCH="${ARCH:-x64}"
 HF_HUB="${HF_HUB:-$HOME/.cache/huggingface/hub}"
