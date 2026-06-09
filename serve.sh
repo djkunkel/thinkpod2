@@ -201,6 +201,31 @@ done
 
 [[ ! -d "$HF_HUB" ]] && die "HuggingFace cache not found at $HF_HUB (set HF_HUB to override)"
 
+# ── Resolve template directory ────────────────────────────────────────────────
+# Use --template-dir if given; otherwise fall back to templates/ next to serve.sh.
+
+if [[ -z "$TEMPLATE_DIR" && -d "$DEFAULT_TEMPLATE_DIR" ]]; then
+    TEMPLATE_DIR="$DEFAULT_TEMPLATE_DIR"
+fi
+
+if [[ -n "$TEMPLATE_DIR" ]]; then
+    [[ ! -d "$TEMPLATE_DIR" ]] && die "template directory not found: $TEMPLATE_DIR"
+    TEMPLATE_DIR="$(cd "$TEMPLATE_DIR" && pwd)"
+fi
+
+# ── Resolve profile template ──────────────────────────────────────────────────
+# If the profile sets TEMPLATE, verify the file exists on the host (inside
+# TEMPLATE_DIR) and inject --jinja + --chat-template-file with the container
+# path /templates/<file> into server_args.
+
+template_args=()
+if [[ -n "$TEMPLATE" ]]; then
+    [[ -z "$TEMPLATE_DIR" ]] && die "profile sets TEMPLATE=$TEMPLATE but no templates directory is available"
+    template_host_file="$TEMPLATE_DIR/$TEMPLATE"
+    [[ ! -f "$template_host_file" ]] && die "profile template not found: $template_host_file"
+    template_args=(--jinja --chat-template-file "/templates/$TEMPLATE")
+fi
+
 # ── Build llama-server args from DEFAULTS ─────────────────────────────────────
 # DEFAULTS is an array of flag+value pairs straight from the profile.
 # User EXTRA_ARGS are appended last so they override any profile default.
@@ -226,31 +251,6 @@ fi
 # Append user overrides (after --)
 if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
     server_args+=("${EXTRA_ARGS[@]}")
-fi
-
-# ── Resolve template directory ────────────────────────────────────────────────
-# Use --template-dir if given; otherwise fall back to templates/ next to serve.sh.
-
-if [[ -z "$TEMPLATE_DIR" && -d "$DEFAULT_TEMPLATE_DIR" ]]; then
-    TEMPLATE_DIR="$DEFAULT_TEMPLATE_DIR"
-fi
-
-if [[ -n "$TEMPLATE_DIR" ]]; then
-    [[ ! -d "$TEMPLATE_DIR" ]] && die "template directory not found: $TEMPLATE_DIR"
-    TEMPLATE_DIR="$(cd "$TEMPLATE_DIR" && pwd)"
-fi
-
-# ── Resolve profile template ──────────────────────────────────────────────────
-# If the profile sets TEMPLATE, verify the file exists on the host (inside
-# TEMPLATE_DIR) and inject --jinja + --chat-template-file with the container
-# path /templates/<file> into server_args.
-
-template_args=()
-if [[ -n "$TEMPLATE" ]]; then
-    [[ -z "$TEMPLATE_DIR" ]] && die "profile sets TEMPLATE=$TEMPLATE but no templates directory is available"
-    template_host_file="$TEMPLATE_DIR/$TEMPLATE"
-    [[ ! -f "$template_host_file" ]] && die "profile template not found: $template_host_file"
-    template_args=(--jinja --chat-template-file "/templates/$TEMPLATE")
 fi
 
 # ── Select image ──────────────────────────────────────────────────────────────

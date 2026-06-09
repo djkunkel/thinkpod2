@@ -22,7 +22,7 @@
 # Flags after -- are forwarded to llama-server and override profile defaults.
 #
 # Environment:
-#   LLAMA_RELEASE    llama.cpp release tag to use  (default: b9351)
+#   LLAMA_RELEASE    llama.cpp release tag to use  (default: latest from GitHub)
 #   ROCM_VERSION     ROCm version in the asset name (default: 7.2)
 #   ARCH             CPU architecture override      (default: x64)
 #   HF_HUB           HuggingFace cache directory   (default: ~/.cache/huggingface/hub)
@@ -38,7 +38,25 @@ set -euo pipefail
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 
-LLAMA_RELEASE="${LLAMA_RELEASE:-b9536}"
+# Resolve the latest llama.cpp release tag from GitHub if no override is set.
+_resolve_llama_release() {
+    local fallback="b9536"
+    if [[ -n "${LLAMA_RELEASE:-}" ]]; then
+        echo "$LLAMA_RELEASE"
+        return
+    fi
+    local tag
+    tag="$(curl -fsSL --max-time 5 \
+        "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest" \
+        2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')"
+    if [[ -n "$tag" ]]; then
+        echo "$tag"
+    else
+        echo "$fallback"
+    fi
+}
+
+LLAMA_RELEASE="$(_resolve_llama_release)"
 ROCM_VERSION="${ROCM_VERSION:-7.2}"
 ARCH="${ARCH:-x64}"
 HF_HUB="${HF_HUB:-$HOME/.cache/huggingface/hub}"
@@ -112,7 +130,7 @@ while [[ $# -gt 0 ]]; do
             echo "  -- ARGS           Forward remaining args to llama-server (override defaults)"
             echo ""
             echo "Environment:"
-            echo "  LLAMA_RELEASE    Release tag          (default: ${LLAMA_RELEASE})"
+            echo "  LLAMA_RELEASE    Release tag          (default: latest from GitHub, resolved to ${LLAMA_RELEASE})"
             echo "  ROCM_VERSION     ROCm version in asset name (default: ${ROCM_VERSION})"
             echo "  ARCH             CPU arch             (default: ${ARCH})"
             echo "  HF_HUB           HuggingFace cache    (default: ~/.cache/huggingface/hub)"
