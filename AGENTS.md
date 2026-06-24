@@ -69,7 +69,15 @@ Both scripts accept the same basic interface:
 ```
 
 `serve.sh` backends: `--cuda`, `--cuda12`, `--rocm`, `--vulkan`
-`local.sh` backends: `--cpu`, `--rocm`, `--vulkan`
+`local.sh` backends: `--cpu`, `--rocm`, `--rocm-nightly`, `--vulkan`
+
+The `--rocm-nightly` backend pulls ZIP builds from
+`lemonade-sdk/llamacpp-rocm` (configurable via `ROCM_NIGHTLY_REPO`) instead of
+upstream llama.cpp tarballs. The GPU target is selected via `ROCM_GFX`
+(default `gfx120X`); the build tag auto-resolves from that repo or can be
+pinned with `--release` (e.g. `b1293`). Builds are cached under
+`bin/<repo>/<tag>/rocm-nightly-<gfx>/` (namespaced by repo so the nightly
+`b####` tags never collide with upstream llama.cpp tags).
 
 `serve.sh` also accepts `--template-dir <dir>` to mount a custom template
 directory into the container at `/templates`. It defaults to `templates/` if
