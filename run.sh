@@ -171,10 +171,28 @@ done
 # ── Validate ──────────────────────────────────────────────────────────────────
 
 [[ -z "$BACKEND" ]] && die "a backend is required (try --help)"
-[[ -z "$PROFILE" ]] && die "--profile NAME is required"
 
-profile_file="$PROFILES_DIR/${PROFILE}.sh"
-[[ ! -f "$profile_file" ]] && die "profile not found: $profile_file"
+# ── Profile selection ─────────────────────────────────────────────────────────
+# If --profile was not given, list available profiles and prompt for one.
+
+if [[ -z "$PROFILE" ]]; then
+    mapfile -t profile_files < <(ls "$PROFILES_DIR"/*.sh 2>/dev/null | sort)
+    [[ ${#profile_files[@]} -eq 0 ]] && die "no profiles found in $PROFILES_DIR"
+
+    echo "Available profiles:"
+    echo ""
+    PS3=$'\nSelect a profile: '
+    select profile_file in "${profile_files[@]##*/}"; do
+        [[ -n "$profile_file" ]] && break
+        echo "Invalid selection, try again."
+    done
+    PROFILE="${profile_file%.sh}"
+    profile_file="$PROFILES_DIR/$profile_file"
+    echo ""
+else
+    profile_file="$PROFILES_DIR/${PROFILE}.sh"
+    [[ ! -f "$profile_file" ]] && die "profile not found: $profile_file"
+fi
 
 # ── Source profile ────────────────────────────────────────────────────────────
 
