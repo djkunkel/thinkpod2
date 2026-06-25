@@ -1,6 +1,6 @@
 ---
 name: new-profile
-description: Guide the user through finding a GGUF model on HuggingFace, researching recommended settings, and creating a profile for use with serve.sh or local.sh.
+description: Guide the user through finding a GGUF model on HuggingFace, researching recommended settings, and creating a profile for use with run.sh.
 ---
 
 # New Profile Skill
@@ -17,8 +17,7 @@ or skip steps.
    card, and determine recommended runtime settings.
 3. **Create a profile** — write a `profiles/<name>.sh` file with the correct
    `REPO`, `FILES`, and `DEFAULTS` arrays.
-4. **Show how to run it** — print the correct `serve.sh` or
-   `local.sh` command for the user's hardware.
+4. **Show how to run it** — print the correct `run.sh` command for the user's hardware.
 
 Each step is described in detail below.
 
@@ -145,10 +144,10 @@ Important rules for the profile:
 - `FILES` is a **bash array** with parentheses and quoted elements.
 - `DEFAULTS` is a **bash array**.  Flag-value pairs are adjacent elements
   (e.g. `--n-predict 32768` is two elements: `--n-predict` and `32768`).
-- Do **not** include `--ctx-size` in profiles. `local.sh` runs let llama-server
-  auto-fit context to available VRAM. For `serve.sh` (container) runs the user
-  can pass `-- --ctx-size <N>` at the command line since the container cannot
-  see host VRAM.
+- Do **not** include `--ctx-size` in profiles. Binary backends let llama-server
+  auto-fit context to available VRAM. For container backends (`--cuda`,
+  `--cuda12`) the user can pass `-- --ctx-size <N>` at the command line since
+  the container cannot see host VRAM.
 - `--n-gpu-layers 999` means "offload all layers to GPU" — always include this.
 - `--flash-attn on` should always be included.
 - Only include `--reasoning-budget` if reasoning is `on`.
@@ -166,68 +165,37 @@ confirmation.
 
 ## Step 4 — Show how to run it
 
-Ask the user about their hardware to determine which runner to use:
+Ask the user about their hardware to determine which backend to use:
 
-- **Container + GPU (recommended for NVIDIA)** → `serve.sh`
-- **Local binary (no container)** → `local.sh`
-
-### 4a. Container runner (serve.sh)
-
-Ask which GPU backend:
-
-| Flag       | Backend                                  |
-|------------|------------------------------------------|
-| `--cuda`   | NVIDIA CUDA 13                           |
-| `--cuda12` | NVIDIA CUDA 12                           |
-| `--rocm`   | AMD discrete GPUs                        |
-| `--vulkan` | Vulkan (AMD iGPU, Intel, broad compat)   |
+| Flag            | Backend                                        |
+|-----------------|------------------------------------------------|
+| `--cpu`         | CPU-only binary (upstream llama.cpp release)   |
+| `--rocm`        | AMD ROCm binary (upstream llama.cpp release)   |
+| `--rocm-nightly`| AMD ROCm binary (lemonade-sdk nightly)         |
+| `--vulkan`      | Vulkan binary (upstream llama.cpp release)     |
+| `--cuda`        | NVIDIA CUDA 13 (container via podman/docker)   |
+| `--cuda12`      | NVIDIA CUDA 12 (container via podman/docker)   |
 
 Print the run command:
 
 ```bash
-./serve.sh --<backend> --profile <name>
+./run.sh --<backend> --profile <name>
 ```
 
 Mention that `--dry-run` prints the full underlying command, and that extra
 llama-server flags can be passed after `--`:
 
 ```bash
-./serve.sh --rocm --profile <name> -- --ctx-size 110000
+./run.sh --rocm --profile <name> -- --ctx-size 110000
 ```
 
-Device flags reference (for manual `podman run` usage):
+Binary backends download the release automatically on first use and cache it
+under `bin/`. Override the release tag with `--release TAG` or the
+`LLAMA_RELEASE` environment variable.
 
-| Backend | Flags                                                                              |
-|---------|------------------------------------------------------------------------------------|
-| CUDA    | `--device nvidia.com/gpu=all --security-opt label=disable`                         |
-| ROCm    | `--device /dev/kfd --device /dev/dri --security-opt seccomp=unconfined --security-opt label=disable` |
-| Vulkan  | `--device /dev/dri --security-opt label=disable`                                   |
-
-All container run commands must include `--network host` (required due to a
-podman rootless pasta bug with IPv6).
-
-### 4b. Local binary runner (local.sh)
-
-Ask which backend:
-
-| Flag       | Backend                              |
-|------------|--------------------------------------|
-| `--cpu`    | CPU-only                             |
-| `--rocm`   | AMD ROCm                             |
-| `--vulkan` | Vulkan                               |
-
-Note: there is no upstream Ubuntu CUDA release binary — use `serve.sh`
-for NVIDIA GPU workloads.
-
-Print the run command:
-
-```bash
-./local.sh --<backend> --profile <name>
-```
-
-The binary is downloaded automatically from the llama.cpp GitHub releases on
-first use and cached under `bin/`.  The default release is `b9351`; override
-with `--release TAG` or the `LLAMA_RELEASE` environment variable.
+Container backends (`--cuda`, `--cuda12`) require podman or docker and pull
+the upstream ghcr.io image. All container runs use `--network host` (required
+due to a podman rootless pasta bug with IPv6).
 
 ---
 
@@ -236,12 +204,11 @@ with `--release TAG` or the `LLAMA_RELEASE` environment variable.
 Look at the existing profiles in `profiles/` for style and format reference.
 Key files:
 
-- `profiles/qwen3.5-4b.sh` — vision + reasoning model
+- `profiles/gemma-4-12b-mtp.sh` — vision + MTP + reasoning model
 - `profiles/qwen3.6-27b-mtp.sh` — MTP speculative decoding, reasoning, no vision
-- `profiles/wayfarer-2-12b.sh` — roleplay model, no vision, no reasoning
+- `profiles/wayfarer-2-12b.sh`  — roleplay model, no vision, no reasoning
 
 ## Reference: key scripts
 
-- `serve.sh`               — run via upstream llama.cpp container, HF cache mounted
-- `local.sh`               — run via downloaded llama.cpp release binary, no container
+- `run.sh`                  — unified launcher (binary and container backends)
 - `scripts/test-context.sh` — needle-in-haystack context window stress test

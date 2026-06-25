@@ -8,8 +8,7 @@ profile files.
 
 ```
 thinkpod2/
-├── serve.sh               # Container-based launcher (podman/docker + ghcr.io image)
-├── local.sh               # Direct binary launcher (downloads llama.cpp release binary)
+├── run.sh                 # Unified launcher — binary and container backends
 ├── profiles/              # Model profiles — one .sh file per model variant
 │   └── README.md          # llama-server flag reference
 ├── templates/             # Custom Jinja chat templates (.jinja files)
@@ -24,8 +23,7 @@ thinkpod2/
 
 ## Profile format
 
-A profile is a bash file sourced by `serve.sh` and `local.sh`. It sets three
-variables:
+A profile is a bash file sourced by `run.sh`. It sets three variables:
 
 ```bash
 REPO="org/Model-GGUF"                      # HuggingFace repo
@@ -45,13 +43,13 @@ DEFAULTS=(                                 # llama-server flags as a bash array
 ```
 
 Key rules:
-- **Never include `--ctx-size`** in a profile. `local.sh` lets llama-server
-  auto-fit context to available VRAM. For `serve.sh` (container) the user
-  passes `-- --ctx-size <N>` at the command line since the container cannot
-  introspect host VRAM.
+- **Never include `--ctx-size`** in a profile. Binary backends let llama-server
+  auto-fit context to available VRAM. For container backends (`--cuda`,
+  `--cuda12`) pass `-- --ctx-size <N>` at the command line since the container
+  cannot introspect host VRAM.
 - `FILES` and `DEFAULTS` are bash arrays — use parentheses and quoted elements.
 - `TEMPLATE` is a bare filename (no path); the file must exist in `templates/`.
-  Both launchers resolve it automatically and inject `--jinja --chat-template-file`.
+  `run.sh` resolves it automatically and injects `--jinja --chat-template-file`.
 - `--n-gpu-layers 999` and `--flash-attn on` should always be present.
 - For MTP (Multi-Token Prediction) models add `--spec-type draft-mtp` and
   `--spec-draft-n-max 2`.
@@ -59,31 +57,30 @@ Key rules:
   `--reasoning-budget-message` only if a budget is needed to prevent think-block
   leakage.
 
-## serve.sh and local.sh
-
-Both scripts accept the same basic interface:
+## run.sh
 
 ```bash
-./serve.sh --<backend> --profile <name> [--dry-run] [-- extra llama-server flags]
-./local.sh --<backend> --profile <name> [--dry-run] [-- extra llama-server flags]
+./run.sh --<backend> --profile <name> [--dry-run] [-- extra llama-server flags]
 ```
 
-`serve.sh` backends: `--cuda`, `--cuda12`, `--rocm`, `--vulkan`
-`local.sh` backends: `--cpu`, `--rocm`, `--rocm-nightly`, `--vulkan`
+Binary backends (download llama.cpp release tarball, cache under `bin/`):
+`--cpu`, `--rocm`, `--rocm-nightly`, `--vulkan`
+
+Container backends (pull ghcr.io image via podman/docker):
+`--cuda`, `--cuda12`
 
 The `--rocm-nightly` backend pulls ZIP builds from
 `lemonade-sdk/llamacpp-rocm` (configurable via `ROCM_NIGHTLY_REPO`) instead of
 upstream llama.cpp tarballs. The GPU target is selected via `ROCM_GFX`
 (default `gfx120X`); the build tag auto-resolves from that repo or can be
 pinned with `--release` (e.g. `b1293`). Builds are cached under
-`bin/<repo>/<tag>/rocm-nightly-<gfx>/` (namespaced by repo so the nightly
-`b####` tags never collide with upstream llama.cpp tags).
+`bin/rocm-nightly/<tag>-<gfx>/`.
 
-`serve.sh` also accepts `--template-dir <dir>` to mount a custom template
+Container backends accept `--template-dir <dir>` to mount a custom template
 directory into the container at `/templates`. It defaults to `templates/` if
 that directory exists.
 
-The scripts do not exit on their own — they run llama-server in the foreground.
+The script does not exit on its own — it runs llama-server in the foreground.
 
 ## Making changes
 
@@ -93,11 +90,10 @@ Use an existing profile as a reference. Do not add `--ctx-size`.
 **Adding a chat template:** place the `.jinja` file in `templates/` and set
 `TEMPLATE="<filename>.jinja"` in the relevant profile(s).
 
-**Modifying serve.sh or local.sh:** both scripts are plain bash with
-`set -euo pipefail`. Always run `bash -n <script>` to syntax-check after
-editing. The profile is sourced after argument parsing; variables set in the
-profile (`REPO`, `FILES`, `DEFAULTS`, `TEMPLATE`) must be initialized to empty
-defaults before the `source` call.
+**Modifying run.sh:** plain bash with `set -euo pipefail`. Always run
+`bash -n run.sh` to syntax-check after editing. The profile is sourced after
+argument parsing; variables set in the profile (`REPO`, `FILES`, `DEFAULTS`,
+`TEMPLATE`) must be initialized to empty defaults before the `source` call.
 
 **Updating the skill:** the `new-profile` skill at
 `.opencode/skills/new-profile/SKILL.md` is the authoritative guide for
@@ -109,5 +105,5 @@ profile format or script behavior.
 - Do not add a build system, Makefile, or CI pipeline unless explicitly asked.
 - Do not add `--ctx-size` to profiles — llama-server auto-fits on bare metal.
 - Do not hardcode VRAM budgets or context size guesses into profiles.
-- Do not modify `bin/` contents (gitignored, managed by `local.sh` at runtime).
+- Do not modify `bin/` contents (gitignored, managed by `run.sh` at runtime).
 - Do not add dependencies beyond standard POSIX utilities (`bash`, `curl`, `tar`).
