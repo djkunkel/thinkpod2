@@ -1,57 +1,42 @@
 # thinkpod2
 
-Lightweight llama-server launcher using profiles.  No baked-in model images —
-models are loaded directly from the local HuggingFace cache.
-
-## Concepts
-
-A **profile** (`profiles/<name>.sh`) describes a model and its runtime
-defaults: the HuggingFace repo, the GGUF file(s) to load, and the
-llama-server flags to pass.
-
-Two launchers are provided:
-
-| Script | How it works |
-|--------|--------------|
-| `serve.sh` | Runs the upstream `ghcr.io/ggml-org/llama.cpp` container with the HF cache mounted read-only. Best for NVIDIA (CUDA) and when you want a hermetic runtime. |
-| `local.sh` | Downloads a pinned llama.cpp release binary and runs it directly. No container needed. Best for ROCm, Vulkan, or CPU workloads. |
+Lightweight llama-server launcher using profiles. No baked-in model
+images — models load directly from the local HuggingFace cache.
 
 ## Quick start
 
-### Container (serve.sh)
-
 ```bash
-# NVIDIA GPU
-./serve.sh --cuda --profile qwen3.5-4b
-
-# AMD discrete GPU
-./serve.sh --rocm --profile qwen3.5-4b
-
-# Vulkan (AMD iGPU, Intel, etc.)
-./serve.sh --vulkan --profile qwen3.5-4b
+./run.sh --rocm --profile wayfarer-2-12b
 ```
 
-### Local binary (local.sh)
+Pick a backend for your hardware:
 
-```bash
-# AMD ROCm (downloads release binary on first run, cached under bin/)
-./local.sh --rocm --profile qwen3.5-4b
+| Backend | Use for |
+|---------|---------|
+| `--cpu` | CPU-only inference |
+| `--rocm` | AMD ROCm (upstream release) |
+| `--rocm-nightly` | AMD ROCm (lemonade-sdk nightly builds) |
+| `--vulkan` | Vulkan (AMD iGPU, Intel, etc.) |
+| `--cuda` | NVIDIA CUDA 13 (container) |
+| `--cuda12` | NVIDIA CUDA 12 (container) |
 
-# Vulkan
-./local.sh --vulkan --profile qwen3.5-4b
+The server starts in the foreground and is available at
+`http://localhost:8080`. See available profiles with `ls profiles/` or
+omit `--profile` to be prompted.
 
-# CPU-only
-./local.sh --cpu --profile qwen3.5-4b
-```
-
-After starting, the server is available at `http://localhost:8080`.
-
-### Override profile defaults at run time
+### Override defaults at run time
 
 Append extra llama-server flags after `--`:
 
 ```bash
-./serve.sh --rocm --profile qwen3.5-4b -- --ctx-size 65536 --n-predict 8192
+./run.sh --rocm --profile wayfarer-2-12b -- --ctx-size 65536 --n-predict 8192
+```
+
+Pin a specific release tag for one run (binary backends) without changing
+the saved selection:
+
+```bash
+./run.sh --rocm --profile wayfarer-2-12b --release b3456
 ```
 
 ### Dry run
@@ -59,24 +44,27 @@ Append extra llama-server flags after `--`:
 Print the full command without executing it:
 
 ```bash
-./serve.sh --rocm --profile qwen3.5-4b --dry-run
-./local.sh --rocm --profile qwen3.5-4b --dry-run
+./run.sh --rocm --profile wayfarer-2-12b --dry-run
 ```
 
-## Available profiles
+## Backends
 
-| Profile | Model | Quant | Vision | Reasoning | Context |
-|---------|-------|-------|--------|-----------|---------|
-| `qwen3.5-0.8` | Qwen 3.5 0.8B | Q8_0 | yes | yes (1024) | 8192 |
-| `qwen3.5-4b` | Qwen 3.5 4B | Q4_K_M | yes | yes (4096) | 131072 |
-| `qwen3.5-9b` | Qwen 3.5 9B | Q6_K | yes | yes (4096) | 131072 |
-| `qwen3.5-9b-q4` | Qwen 3.5 9B | Q4_K_M | yes | yes (4096) | 131072 |
-| `qwen3.5-35b-a3b` | Qwen 3.5 35B-A3B (MoE) | Q4_K_M | yes | yes (4096) | 131072 |
-| `qwen3.6-27b` | Qwen 3.6 27B | UD-Q4_K_XL | yes | yes | 150000 |
-| `qwen3.6-27b-mtp` | Qwen 3.6 27B MTP | UD-Q4_K_XL | no | yes + MTP | — |
-| `qwen3.6-35b-a3b` | Qwen 3.6 35B-A3B (MoE) | UD-Q4_K_M | yes | yes (4096) | 131072 |
-| `qwopus3.6-35b-a3b-v1` | Qwopus 3.6 35B-A3B v1 | Q4_K_M | yes | yes (6000) | — |
-| `wayfarer-2-12b` | Wayfarer 2 12B | Q4_K_M | no | no | 32768 |
+`run.sh` runs a cached llama-server build (binary backends) or a ghcr.io
+image (container backends). It never downloads anything itself — selection
+and downloads are handled by `backends.sh`, which records the current
+choice per backend in the gitignored `bin/current` file. If no build is
+cached, `run.sh` asks `backends.sh update` to fetch one.
+
+```bash
+./backends.sh update  --rocm                # download latest, mark current
+./backends.sh update  --rocm --release b3456  # download a pinned tag
+./backends.sh use     --rocm --release b3456  # select an already-cached build
+./backends.sh list                        # show cached builds + current
+./backends.sh prune --keep 2              # remove old builds, keep newest 2
+```
+
+See `./backends.sh --help` for full options. Binary builds cache under
+`bin/<backend>/<tag>/` (`bin/rocm-nightly/<tag>-<gfx>/` for nightly).
 
 ## Environment variables
 
@@ -85,31 +73,33 @@ Print the full command without executing it:
 | `HF_HUB` | `~/.cache/huggingface/hub` | HuggingFace cache directory |
 | `HOST` | `0.0.0.0` | Bind address |
 | `PORT` | `8080` | Bind port |
-| `ENGINE` | auto-detected | Container engine (`podman` or `docker`) |
-| `LLAMA_RELEASE` | `b9351` | llama.cpp release tag (local.sh only) |
-| `ROCM_VERSION` | `7.2` | ROCm version in asset name (local.sh only) |
-| `IMAGE` | per-backend ghcr.io tag | Override container image (serve.sh only) |
+| `ENGINE` | auto-detected | Container engine: `podman` or `docker` |
+| `LLAMA_RELEASE` | *(latest / `bin/current`)* | Pin a release tag for one run (binary backends) |
+| `IMAGE` | per-backend ghcr.io tag | Override container image (container backends) |
+
+`ROCM_VERSION`, `ROCM_NIGHTLY_REPO`, `ROCM_GFX`, and `ARCH` are honored by
+`backends.sh` when downloading — see `./backends.sh --help`.
 
 ## Test the context window
 
 ```bash
-./scripts/test-context.sh                    # test localhost:8080 at 75% fill
-./scripts/test-context.sh 9090              # different port
-./scripts/test-context.sh localhost:8080 0.9  # push to 90% fill
+./scripts/test-context.sh                       # test localhost:8080 at 75% fill
+./scripts/test-context.sh 9090                   # different port
+./scripts/test-context.sh cowboy.lan:8080 0.9    # remote host, 90% fill
 ```
 
 ## Creating a new profile
 
-Use the `new-profile` opencode skill — it guides you through finding a model
-on HuggingFace, researching the correct settings, and writing the profile file.
-
-Alternatively, copy an existing profile and adjust the three variables:
+Use the `new-profile` opencode skill — it guides you through finding a
+model on HuggingFace, researching the correct settings, and writing the
+profile file. Alternatively, copy an existing profile and adjust the
+variables:
 
 ```bash
 REPO="org/Model-GGUF"
-FILES=("Model-Q4_K_M.gguf")   # bash array; add "mmproj-F16.gguf" for vision
+FILES=("Model-Q4_K_M.gguf")        # bash array; add "mmproj-F16.gguf" for vision
+TEMPLATE="my-chat-template.jinja"  # optional; file must live in templates/
 DEFAULTS=(
-    --ctx-size 131072
     --n-predict 32768
     --n-gpu-layers 999
     --flash-attn on
@@ -118,23 +108,28 @@ DEFAULTS=(
     --top-p 0.95
     --presence-penalty 1.5
     --reasoning on
-    --reasoning-budget 4096
-    --reasoning-budget-message $'\n\nOkay, I need to stop thinking and give my response now.\n'
 )
 ```
+
+Never include `--ctx-size` — binary backends auto-fit context to available
+VRAM. Pass it at the command line (`-- --ctx-size N`) only when needed
+(e.g. container backends, which can't introspect host VRAM). See
+`profiles/README.md` for the full llama-server flag reference.
 
 ## Directory layout
 
 ```
 thinkpod2/
-├── serve.sh           # Container-based launcher
-├── local.sh           # Direct binary launcher
-├── profiles/          # Model profiles (one .sh file per model variant)
+├── run.sh                 # Launcher — builds llama-server args + runs the backend
+├── backends.sh            # Backend lifecycle — update/use/list/prune/current
+├── profiles/              # Model profiles (one .sh file per model variant)
+│   └── README.md          # llama-server flag reference
+├── templates/             # Custom Jinja chat templates (.jinja files)
 ├── scripts/
 │   └── test-context.sh    # Context window stress test
-├── bin/               # Cached llama.cpp release binaries (gitignored)
+├── bin/                   # Cached binaries + `current` state (gitignored)
 └── .opencode/
     └── skills/
         └── new-profile/
-            └── SKILL.md   # AI skill for creating new profiles
+            └── SKILL.md   # Skill for creating new profiles interactively
 ```

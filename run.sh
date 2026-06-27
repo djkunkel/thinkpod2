@@ -2,11 +2,15 @@
 #
 # Run llama-server from a profile.
 #
-# Binary backends (--cpu, --rocm, --rocm-nightly, --vulkan) download a
-# llama.cpp release tarball on first use and cache it under bin/.
+# Binary backends (--cpu, --rocm, --rocm-nightly, --vulkan) run a cached
+# llama.cpp release binary from bin/. Container backends (--cuda, --cuda12)
+# run an upstream ghcr.io image via podman or docker.
 #
-# Container backends (--cuda, --cuda12) pull an upstream ghcr.io image
-# via podman or docker — no binary download needed.
+# Backend lifecycle (download, update, prune, selection) is handled by
+# backends.sh, which records the current selection in the gitignored
+# bin/current file. run.sh reads that file via `backends.sh current`; if no
+# build is cached it asks `backends.sh update` to fetch one. See
+# `./backends.sh --help` for managing backends directly.
 #
 # Usage:
 #   ./run.sh --cpu           --profile NAME [--dry-run] [-- extra llama-server flags]
@@ -27,34 +31,27 @@
 #   --cuda12        NVIDIA CUDA 12 (ghcr.io/ggml-org/llama.cpp:server-cuda)
 #
 # Environment:
-#   LLAMA_RELEASE       llama.cpp release tag (binary backends; default: latest from GitHub)
-#                       for --rocm-nightly this is the lemonade-sdk build tag
-#   ROCM_VERSION        ROCm version in the asset name (default: 7.2)
-#   ROCM_NIGHTLY_REPO   GitHub repo for nightly ROCm builds
-#                       (default: lemonade-sdk/llamacpp-rocm)
-#   ROCM_GFX            GPU target for nightly builds (default: gfx120X)
-#   ARCH                CPU architecture override (default: x64)
+#   LLAMA_RELEASE       Pin a specific release tag for this run (binary
+#                       backends); forwarded to backends.sh. Default: the
+#                       current selection in bin/current, or latest on update.
 #   HF_HUB              HuggingFace cache directory (default: ~/.cache/huggingface/hub)
 #   HOST                Bind address (default: 0.0.0.0)
 #   PORT                Bind port    (default: 8080)
 #   IMAGE               Override container image (container backends only)
 #   ENGINE              Container engine: podman or docker (auto-detected)
 #
-# Binary cache layout:
+# Backend cache + selection (managed by backends.sh, see its --help):
 #   bin/<backend>/<tag>/           — cpu, rocm, vulkan
 #   bin/rocm-nightly/<tag>-<gfx>/  — rocm-nightly
-#   Delete the relevant subdirectory to force a fresh download.
-# Offline: when the GitHub API is unreachable, the newest cached build for
-# the selected backend is reused automatically (no --release pin needed).
+#   bin/current                    — gitignored state file tracking the
+#                                    selected build/image per backend.
+# ROCM_VERSION, ROCM_NIGHTLY_REPO, ROCM_GFX, and ARCH are honored by
+# backends.sh (inherited from the environment) when downloading.
 
 set -euo pipefail
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 
-ROCM_VERSION="${ROCM_VERSION:-7.2}"
-ROCM_NIGHTLY_REPO="${ROCM_NIGHTLY_REPO:-lemonade-sdk/llamacpp-rocm}"
-ROCM_GFX="${ROCM_GFX:-gfx120X}"
-ARCH="${ARCH:-x64}"
 HF_HUB="${HF_HUB:-$HOME/.cache/huggingface/hub}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8080}"
@@ -65,18 +62,11 @@ PROFILE=""
 DRY_RUN=false
 EXTRA_ARGS=()
 
-# Track whether LLAMA_RELEASE was explicitly pinned so the rocm-nightly
-# backend can auto-resolve from its own repo when it wasn't.
-LLAMA_RELEASE_EXPLICIT=false
-if [[ -n "${LLAMA_RELEASE:-}" ]]; then
-    LLAMA_RELEASE_EXPLICIT=true
-fi
-
 # ── Path resolution ───────────────────────────────────────────────────────────
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROFILES_DIR="$SCRIPT_DIR/profiles"
-BIN_DIR="$SCRIPT_DIR/bin"
+BACKENDS_SH="$SCRIPT_DIR/backends.sh"
 DEFAULT_TEMPLATE_DIR="$SCRIPT_DIR/templates"
 TEMPLATE_DIR=""
 
@@ -85,46 +75,21 @@ TEMPLATE_DIR=""
 die()  { echo "error: $*" >&2; exit 1; }
 info() { echo "==> $*"; }
 
-# Resolve the latest release tag from a GitHub repo.
-# $1 = repo in "owner/name" form. Prints the tag or empty string on failure.
-_resolve_latest_release() {
-    local repo="$1"
-    curl -fsSL --max-time 5 \
-        "https://api.github.com/repos/${repo}/releases/latest" \
-        2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/' || true
-}
-
 # Is this a container backend?
 _is_container() {
     [[ "$1" == "cuda" || "$1" == "cuda12" ]]
 }
 
-# Find the newest cached release tag for a binary backend.
-# $1 = backend. Prints the tag (without gfx suffix) or empty if none cached.
-# Only directories containing an executable llama-server are considered.
-_latest_cached_release() {
-    local backend="$1" search_dir
-    if [[ "$backend" == "rocm-nightly" ]]; then
-        search_dir="$BIN_DIR/rocm-nightly"
-    else
-        search_dir="$BIN_DIR/$backend"
-    fi
-    [[ -d "$search_dir" ]] || return 0
-
-    local entry candidates=() sorted
-    while IFS= read -r entry; do
-        [[ -x "$search_dir/$entry/llama-server" ]] || continue
-        if [[ "$backend" == "rocm-nightly" ]]; then
-            [[ "$entry" == *-"$ROCM_GFX" ]] || continue
-            candidates+=("${entry%-$ROCM_GFX}")
-        else
-            candidates+=("$entry")
-        fi
-    done < <(ls -1 "$search_dir" 2>/dev/null)
-
-    (( ${#candidates[@]} > 0 )) || return 0
-    sorted=$(printf '%s\n' "${candidates[@]}" | sort -Vr)
-    echo "${sorted%%$'\n'*}"
+# Display label for the summary (version details come from backends.sh).
+backend_label() {
+    case "$1" in
+        cpu)          echo "CPU (Ubuntu x64)" ;;
+        rocm)         echo "AMD ROCm" ;;
+        rocm-nightly) echo "AMD ROCm nightly" ;;
+        vulkan)       echo "Vulkan" ;;
+        cuda)         echo "NVIDIA CUDA 13 (container)" ;;
+        cuda12)       echo "NVIDIA CUDA 12 (container)" ;;
+    esac
 }
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
@@ -145,7 +110,6 @@ while [[ $# -gt 0 ]]; do
         --release)
             [[ -z "${2:-}" ]] && die "--release requires a tag (e.g. --release b9785)"
             LLAMA_RELEASE="$2"
-            LLAMA_RELEASE_EXPLICIT=true
             shift 2
             ;;
         --template-dir)
@@ -157,13 +121,13 @@ while [[ $# -gt 0 ]]; do
         --help|-h)
             echo "Usage: ./run.sh --BACKEND --profile NAME [--dry-run] [-- LLAMA_ARGS...]"
             echo ""
-            echo "Binary backends (download llama.cpp release binary):"
+            echo "Binary backends (run a cached llama.cpp release binary):"
             echo "  --cpu           Ubuntu x64 CPU-only"
             echo "  --rocm          Ubuntu x64 ROCm (upstream release)"
             echo "  --rocm-nightly  Ubuntu x64 ROCm (lemonade-sdk nightly)"
             echo "  --vulkan        Ubuntu x64 Vulkan"
             echo ""
-            echo "Container backends (pull ghcr.io image via podman/docker):"
+            echo "Container backends (run a ghcr.io image via podman/docker):"
             echo "  --cuda          NVIDIA CUDA 13"
             echo "  --cuda12        NVIDIA CUDA 12"
             echo ""
@@ -176,16 +140,14 @@ while [[ $# -gt 0 ]]; do
             echo "  -- ARGS             Forward remaining args to llama-server"
             echo ""
             echo "Environment:"
-            echo "  LLAMA_RELEASE       Release tag (default: latest from GitHub)"
-            echo "  ROCM_VERSION        ROCm version in asset name (default: ${ROCM_VERSION})"
-            echo "  ROCM_NIGHTLY_REPO   Nightly ROCm repo (default: ${ROCM_NIGHTLY_REPO})"
-            echo "  ROCM_GFX            Nightly GPU target (default: ${ROCM_GFX})"
-            echo "  ARCH                CPU arch (default: ${ARCH})"
+            echo "  LLAMA_RELEASE       Pin a release tag for this run (binary backends)"
             echo "  HF_HUB              HuggingFace cache (default: ~/.cache/huggingface/hub)"
             echo "  HOST                Bind address (default: ${HOST})"
             echo "  PORT                Bind port (default: ${PORT})"
             echo "  IMAGE               Override container image (container backends)"
             echo "  ENGINE              Container engine: podman or docker (auto-detected)"
+            echo ""
+            echo "Backend management: see ./backends.sh --help (update/use/list/prune)."
             exit 0
             ;;
         --)
@@ -293,14 +255,13 @@ if _is_container "$BACKEND"; then
         fi
     fi
 
-    # Select image.
-    default_image() {
-        case "$1" in
-            cuda)   echo "ghcr.io/ggml-org/llama.cpp:server-cuda13" ;;
-            cuda12) echo "ghcr.io/ggml-org/llama.cpp:server-cuda"   ;;
-        esac
-    }
-    IMAGE="${IMAGE:-$(default_image "$BACKEND")}"
+    # Select image: honor an explicit IMAGE override, otherwise ask backends.sh
+    # for the current selection (falls back to the default image if unset).
+    [[ -x "$BACKENDS_SH" ]] || die "backends.sh not found at $BACKENDS_SH"
+    if [[ -z "${IMAGE:-}" ]]; then
+        IMAGE="$("$BACKENDS_SH" current --backend "$BACKEND")" \
+            || die "could not resolve container image for $BACKEND"
+    fi
 
     # Device + security flags.
     mapfile -t dev_flags < <(
@@ -325,7 +286,7 @@ if _is_container "$BACKEND"; then
     # Summary.
     info "profile:  $PROFILE"
     info "model:    $REPO / $HF_FILE"
-    info "backend:  $( [[ "$BACKEND" == cuda ]] && echo "NVIDIA CUDA 13" || echo "NVIDIA CUDA 12" ) (container)"
+    info "backend:  $(backend_label "$BACKEND")"
     info "image:    $IMAGE"
     info "cache:    $HF_HUB"
     [[ -n "$TEMPLATE_DIR" ]] && info "templates: $TEMPLATE_DIR → /templates"
@@ -375,110 +336,46 @@ fi
 
 # ── Binary backend ────────────────────────────────────────────────────────────
 
-# Resolve release tag.
-if [[ -z "${LLAMA_RELEASE:-}" ]]; then
-    LLAMA_RELEASE="$(_resolve_latest_release "ggml-org/llama.cpp")"
-fi
-if [[ "$BACKEND" == "rocm-nightly" && "$LLAMA_RELEASE_EXPLICIT" == false ]]; then
-    LLAMA_RELEASE="$(_resolve_latest_release "$ROCM_NIGHTLY_REPO")"
-fi
-# Offline fallback: if auto-resolution failed, reuse the newest cached build.
-if [[ -z "$LLAMA_RELEASE" && "$LLAMA_RELEASE_EXPLICIT" == false ]]; then
-    LLAMA_RELEASE="$(_latest_cached_release "$BACKEND")"
-    if [[ -n "$LLAMA_RELEASE" ]]; then
-        info "network unavailable — using latest cached ${BACKEND} build: ${LLAMA_RELEASE}"
+# Resolve the cached binary directory for the selected backend.
+#   1. If --release was pinned, use that exact build (downloading if missing).
+#   2. Else read the current selection from bin/current via backends.sh.
+#   3. Else fall back to the newest cached build (handled inside backends.sh).
+#   4. If nothing is cached, ask backends.sh to download one and re-resolve.
+[[ -x "$BACKENDS_SH" ]] || die "backends.sh not found at $BACKENDS_SH"
+
+resolve_cache_dir() {
+    if [[ -n "${LLAMA_RELEASE:-}" ]]; then
+        "$BACKENDS_SH" current --backend "$BACKEND" --release "$LLAMA_RELEASE"
+    else
+        "$BACKENDS_SH" current --backend "$BACKEND"
     fi
-fi
-[[ -z "$LLAMA_RELEASE" ]] && die "could not resolve release tag — no network and no cached ${BACKEND} build; connect to the network or pin a tag with --release"
-
-# Asset filename on GitHub releases.
-asset_name() {
-    case "$1" in
-        cpu)          echo "llama-${LLAMA_RELEASE}-bin-ubuntu-${ARCH}.tar.gz" ;;
-        vulkan)       echo "llama-${LLAMA_RELEASE}-bin-ubuntu-vulkan-${ARCH}.tar.gz" ;;
-        rocm)         echo "llama-${LLAMA_RELEASE}-bin-ubuntu-rocm-${ROCM_VERSION}-${ARCH}.tar.gz" ;;
-        rocm-nightly) echo "llama-${LLAMA_RELEASE}-ubuntu-rocm-${ROCM_GFX}-${ARCH}.zip" ;;
-    esac
 }
 
-backend_label() {
-    case "$1" in
-        cpu)          echo "CPU (Ubuntu x64)" ;;
-        rocm)         echo "AMD ROCm ${ROCM_VERSION}" ;;
-        rocm-nightly) echo "AMD ROCm nightly (${ROCM_GFX})" ;;
-        vulkan)       echo "Vulkan" ;;
-    esac
-}
-
-backend_repo() {
-    [[ "$1" == "rocm-nightly" ]] && echo "${ROCM_NIGHTLY_REPO}" || echo "ggml-org/llama.cpp"
-}
-
-ASSET="$(asset_name "$BACKEND")"
-GH_REPO="$(backend_repo "$BACKEND")"
-
-# Cache layout: bin/<backend>/<tag>/
-# rocm-nightly appends the GPU target to the tag to distinguish per-GPU builds.
-if [[ "$BACKEND" == "rocm-nightly" ]]; then
-    CACHE_DIR="$BIN_DIR/rocm-nightly/${LLAMA_RELEASE}-${ROCM_GFX}"
+if CACHE_DIR="$(resolve_cache_dir 2>/dev/null)"; then
+    :
 else
-    CACHE_DIR="$BIN_DIR/${BACKEND}/${LLAMA_RELEASE}"
+    if [[ -n "${LLAMA_RELEASE:-}" ]]; then
+        info "release ${LLAMA_RELEASE} not cached — downloading"
+        "$BACKENDS_SH" update --"$BACKEND" --release "$LLAMA_RELEASE"
+    else
+        info "no cached ${BACKEND} build — downloading latest"
+        "$BACKENDS_SH" update --"$BACKEND"
+    fi
+    CACHE_DIR="$(resolve_cache_dir)" \
+        || die "backend still not available after update — run './backends.sh update --${BACKEND}' manually"
 fi
 
 SERVER_BIN="$CACHE_DIR/llama-server"
-DOWNLOAD_URL="https://github.com/${GH_REPO}/releases/download/${LLAMA_RELEASE}/${ASSET}"
+[[ -x "$SERVER_BIN" ]] || die "llama-server not found at $SERVER_BIN"
 
-# Check tools.
-command -v curl &>/dev/null || die "curl is required"
-command -v tar  &>/dev/null || die "tar is required"
-[[ "$BACKEND" == "rocm-nightly" ]] && { command -v unzip &>/dev/null || die "unzip is required for --rocm-nightly"; }
-
-# Download if not cached.
-if [[ ! -x "$SERVER_BIN" ]]; then
-    info "binary not cached — downloading ${LLAMA_RELEASE} ${BACKEND} build"
-    info "source: $DOWNLOAD_URL"
-    echo ""
-
-    mkdir -p "$CACHE_DIR"
-
-    case "$BACKEND" in
-        rocm-nightly) TMPFILE="$(mktemp --suffix=.zip)" ;;
-        *)            TMPFILE="$(mktemp --suffix=.tar.gz)" ;;
-    esac
-    trap 'rm -f "$TMPFILE"' EXIT
-
-    if ! curl -fL --progress-bar -o "$TMPFILE" "$DOWNLOAD_URL"; then
-        rm -rf "$CACHE_DIR"
-        die "download failed: $DOWNLOAD_URL"
-    fi
-
-    info "extracting to $CACHE_DIR"
-    case "$BACKEND" in
-        rocm-nightly)
-            unzip -q -o "$TMPFILE" -d "$CACHE_DIR"
-            for bin in "$CACHE_DIR"/llama-*; do
-                [[ -f "$bin" ]] && chmod +x "$bin"
-            done
-            ;;
-        *)
-            tar -xzf "$TMPFILE" -C "$CACHE_DIR" --strip-components=1
-            ;;
-    esac
-
-    [[ ! -x "$SERVER_BIN" ]] && die "extraction succeeded but llama-server not found at $SERVER_BIN"
-    echo ""
-    info "cached at $CACHE_DIR"
-    echo ""
-else
-    info "using cached binary: $SERVER_BIN"
-fi
+# Display tag from the cache dir name (strip the gfx suffix for rocm-nightly).
+RELEASE_TAG="$(basename "$CACHE_DIR")"
 
 # Summary.
 info "profile:  $PROFILE"
 info "model:    $REPO / $HF_FILE"
 info "backend:  $(backend_label "$BACKEND")"
-info "release:  $LLAMA_RELEASE"
-info "source:   github.com/${GH_REPO}"
+info "release:  $RELEASE_TAG"
 info "binary:   $SERVER_BIN"
 [[ -n "$TEMPLATE" ]] && info "template: $SCRIPT_DIR/templates/$TEMPLATE"
 info "endpoint: http://localhost:${PORT}"

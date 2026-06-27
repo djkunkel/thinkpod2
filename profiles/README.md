@@ -1,25 +1,28 @@
 # Profile Defaults Reference
 
-Each profile sets a `DEFAULTS` array of llama-server flags that get baked into
-the container image. Users can override any of them at runtime:
+Each profile sets a `DEFAULTS` array of llama-server flags that `run.sh`
+passes directly to llama-server. Override any of them at runtime by
+appending flags after `--`:
 
 ```sh
-podman run ... $IMAGE -- -c 8192 --reasoning off
+./run.sh --rocm --profile my-model -- -c 8192 --reasoning off
 ```
 
-The entrypoint merges defaults with user flags — user flags always win.
+Extra flags are appended after the profile defaults, so the last
+occurrence wins for llama-server's flag parser.
 
-## Infrastructure flags (always set by entrypoint, not in profiles)
+## Infrastructure flags (set by run.sh, not in profiles)
 
 | Flag | Value | Purpose |
 |------|-------|---------|
-| `-hf` | (from build) | HuggingFace model path inside the container |
-| `--offline` | | Prevent network access at runtime |
-| `--host` | `0.0.0.0` | Listen on all interfaces |
-| `--port` | `8080` | Listening port |
+| `-hf` | (from profile `REPO`) | HuggingFace repo to load the model from |
+| `--hf-file` | (from profile `FILES`) | Specific GGUF file to load |
+| `--host` | `0.0.0.0` (env `HOST`) | Listen address |
+| `--port` | `8080` (env `PORT`) | Listen port |
 | `--metrics` | | Enable Prometheus-compatible `/metrics` endpoint |
 
-These cannot be overridden via profiles — they are hardcoded in `entrypoint.sh`.
+These are set by `run.sh` and should not appear in profiles. A profile's
+`DEFAULTS` are appended after these, and `--` extra args after those.
 
 ---
 
@@ -80,7 +83,8 @@ $'\n\nOkay, I need to stop thinking and give my response now.\n'
 ```
 
 The `$'...'` quoting is required in the profile because the value contains
-literal newlines that must survive serialization into `defaults.conf`.
+literal newlines; the profile is sourced as bash, so the string survives
+intact and is passed through to llama-server.
 
 ## Flags NOT in profiles (but useful at runtime)
 

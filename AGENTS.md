@@ -8,13 +8,14 @@ profile files.
 
 ```
 thinkpod2/
-├── run.sh                 # Unified launcher — binary and container backends
+├── run.sh                 # Launcher — builds llama-server args + runs the backend
+├── backends.sh            # Backend lifecycle — update/use/list/prune/current
 ├── profiles/              # Model profiles — one .sh file per model variant
 │   └── README.md          # llama-server flag reference
 ├── templates/             # Custom Jinja chat templates (.jinja files)
 ├── scripts/
 │   └── test-context.sh    # Needle-in-haystack context window stress test
-├── bin/                   # Cached llama.cpp release binaries (gitignored)
+├── bin/                   # Cached llama.cpp binaries + `current` state (gitignored)
 └── .opencode/
     └── skills/
         └── new-profile/
@@ -63,24 +64,50 @@ Key rules:
 ./run.sh --<backend> --profile <name> [--dry-run] [-- extra llama-server flags]
 ```
 
-Binary backends (download llama.cpp release tarball, cache under `bin/`):
+Binary backends (run a cached llama.cpp release binary from `bin/`):
 `--cpu`, `--rocm`, `--rocm-nightly`, `--vulkan`
 
-Container backends (pull ghcr.io image via podman/docker):
+Container backends (run a ghcr.io image via podman/docker):
 `--cuda`, `--cuda12`
 
-The `--rocm-nightly` backend pulls ZIP builds from
-`lemonade-sdk/llamacpp-rocm` (configurable via `ROCM_NIGHTLY_REPO`) instead of
-upstream llama.cpp tarballs. The GPU target is selected via `ROCM_GFX`
-(default `gfx120X`); the build tag auto-resolves from that repo or can be
-pinned with `--release` (e.g. `b1293`). Builds are cached under
-`bin/rocm-nightly/<tag>-<gfx>/`.
+`run.sh` does not download anything itself. It resolves the backend to use
+via `backends.sh current` (reading the selected build/image from the
+gitignored `bin/current` file, falling back to the newest cached build, and
+if nothing is cached, invoking `backends.sh update` to fetch one). `--release`
+pins a specific tag for a single run without changing `bin/current`.
+
+The `--rocm-nightly` backend uses ZIP builds from `lemonade-sdk/llamacpp-rocm`
+(configurable via `ROCM_NIGHTLY_REPO`) instead of upstream llama.cpp tarballs.
+The GPU target is selected via `ROCM_GFX` (default `gfx120X`); builds are
+cached under `bin/rocm-nightly/<tag>-<gfx>/`.
 
 Container backends accept `--template-dir <dir>` to mount a custom template
 directory into the container at `/templates`. It defaults to `templates/` if
 that directory exists.
 
 The script does not exit on its own — it runs llama-server in the foreground.
+
+## backends.sh
+
+```bash
+./backends.sh <subcommand> --<backend> [options]
+```
+
+Owns the `bin/` cache lifecycle for all backends (binary and container):
+
+- `update [--release TAG]` — download/pull the latest (or pinned) build and
+  mark it current in `bin/current`.
+- `use --release TAG` — mark an already-cached binary build as current (no
+  download; binary backends only).
+- `list [--<backend>]` — show cached builds/images with the current marked.
+- `prune [--keep N]` — delete non-current cached builds (binary) and dangling
+  images (container). `--keep N` preserves the N newest per binary backend.
+- `current [--release TAG]` — print the current cache dir (binary) or image
+  ref (container); used by `run.sh`. Exits 1 if a binary backend has no
+  cached build.
+
+State file: `bin/current` (gitignored) holds `<backend>=<value>` lines, where
+value is the cache subdir name (binary) or image ref (container).
 
 ## Making changes
 
@@ -94,6 +121,13 @@ Use an existing profile as a reference. Do not add `--ctx-size`.
 `bash -n run.sh` to syntax-check after editing. The profile is sourced after
 argument parsing; variables set in the profile (`REPO`, `FILES`, `DEFAULTS`,
 `TEMPLATE`) must be initialized to empty defaults before the `source` call.
+Backend download/selection logic lives in `backends.sh`; `run.sh` should stay
+a thin launcher that calls `backends.sh current`/`update`.
+
+**Modifying backends.sh:** plain bash with `set -euo pipefail`. Always run
+`bash -n backends.sh` after editing. Keep `current`'s output contract stable
+(absolute cache dir for binary backends, image ref for containers; exit 1
+only when a binary backend has no cached build) — `run.sh` depends on it.
 
 **Updating the skill:** the `new-profile` skill at
 `.opencode/skills/new-profile/SKILL.md` is the authoritative guide for
@@ -105,5 +139,5 @@ profile format or script behavior.
 - Do not add a build system, Makefile, or CI pipeline unless explicitly asked.
 - Do not add `--ctx-size` to profiles — llama-server auto-fits on bare metal.
 - Do not hardcode VRAM budgets or context size guesses into profiles.
-- Do not modify `bin/` contents (gitignored, managed by `run.sh` at runtime).
+- Do not modify `bin/` contents (gitignored, managed by `backends.sh`).
 - Do not add dependencies beyond standard POSIX utilities (`bash`, `curl`, `tar`).
