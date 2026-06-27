@@ -9,10 +9,13 @@ REPO="LatitudeGames/Wayfarer-2-12B-GGUF"
 FILES=("Wayfarer-2-12B-Q4_K_M.gguf")
 
 # Runtime defaults — native llama-server flags.
-# Baked into the image; overridable at `podman run` time via -- args.
+# Passed directly to llama-server; overridable at run time via -- args.
 # Sampling values from model card recommendations.
+#
+# No --ctx-size set: llama-server auto-fits to available VRAM (native max is
+# 131072). With a container backend (--cuda/--cuda12), pass `-- --ctx-size N`
+# since the container cannot see host VRAM.
 DEFAULTS=(
-    --ctx-size 32768
     --n-predict 4096
     --n-gpu-layers 999
     --flash-attn on

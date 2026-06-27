@@ -10,7 +10,7 @@ REPO="unsloth/Qwen3.6-35B-A3B-MTP-GGUF"
 FILES=("Qwen3.6-35B-A3B-UD-Q4_K_M.gguf" "mmproj-F16.gguf")
 
 # Runtime defaults — native llama-server flags.
-# Baked into the image; overridable at `podman run` time via -- args.
+# Passed directly to llama-server; overridable at run time via -- args.
 #
 # Context capped at 131072: native max is 262144 but 32GB VRAM leaves ~10GB
 # for KV cache at UD-Q4_K_M; 131072 keeps that budget comfortable.

@@ -13,7 +13,7 @@ FILES=("Qwen3.6-27B-UD-Q4_K_XL.gguf" "mmproj-BF16.gguf")
 TEMPLATE="qwen-fixed-chat-template.jinja"
 
 # Runtime defaults — native llama-server flags.
-# Baked into the image; overridable at `podman run` time via -- args.
+# Passed directly to llama-server; overridable at run time via -- args.
 #
 # Context capped at 131072: native max is 262144 but 32GB VRAM leaves ~10GB
 # for KV cache at UD-Q4_K_XL; 131072 keeps that budget comfortable.
