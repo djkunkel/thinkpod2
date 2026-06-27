@@ -44,6 +44,8 @@
 #   bin/<backend>/<tag>/           — cpu, rocm, vulkan
 #   bin/rocm-nightly/<tag>-<gfx>/  — rocm-nightly
 #   Delete the relevant subdirectory to force a fresh download.
+# Offline: when the GitHub API is unreachable, the newest cached build for
+# the selected backend is reused automatically (no --release pin needed).
 
 set -euo pipefail
 
@@ -89,12 +91,40 @@ _resolve_latest_release() {
     local repo="$1"
     curl -fsSL --max-time 5 \
         "https://api.github.com/repos/${repo}/releases/latest" \
-        2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/'
+        2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/' || true
 }
 
 # Is this a container backend?
 _is_container() {
     [[ "$1" == "cuda" || "$1" == "cuda12" ]]
+}
+
+# Find the newest cached release tag for a binary backend.
+# $1 = backend. Prints the tag (without gfx suffix) or empty if none cached.
+# Only directories containing an executable llama-server are considered.
+_latest_cached_release() {
+    local backend="$1" search_dir
+    if [[ "$backend" == "rocm-nightly" ]]; then
+        search_dir="$BIN_DIR/rocm-nightly"
+    else
+        search_dir="$BIN_DIR/$backend"
+    fi
+    [[ -d "$search_dir" ]] || return 0
+
+    local entry candidates=() sorted
+    while IFS= read -r entry; do
+        [[ -x "$search_dir/$entry/llama-server" ]] || continue
+        if [[ "$backend" == "rocm-nightly" ]]; then
+            [[ "$entry" == *-"$ROCM_GFX" ]] || continue
+            candidates+=("${entry%-$ROCM_GFX}")
+        else
+            candidates+=("$entry")
+        fi
+    done < <(ls -1 "$search_dir" 2>/dev/null)
+
+    (( ${#candidates[@]} > 0 )) || return 0
+    sorted=$(printf '%s\n' "${candidates[@]}" | sort -Vr)
+    echo "${sorted%%$'\n'*}"
 }
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
@@ -352,7 +382,14 @@ fi
 if [[ "$BACKEND" == "rocm-nightly" && "$LLAMA_RELEASE_EXPLICIT" == false ]]; then
     LLAMA_RELEASE="$(_resolve_latest_release "$ROCM_NIGHTLY_REPO")"
 fi
-[[ -z "$LLAMA_RELEASE" ]] && die "could not resolve release tag from GitHub API — check your network or pin a tag with --release"
+# Offline fallback: if auto-resolution failed, reuse the newest cached build.
+if [[ -z "$LLAMA_RELEASE" && "$LLAMA_RELEASE_EXPLICIT" == false ]]; then
+    LLAMA_RELEASE="$(_latest_cached_release "$BACKEND")"
+    if [[ -n "$LLAMA_RELEASE" ]]; then
+        info "network unavailable — using latest cached ${BACKEND} build: ${LLAMA_RELEASE}"
+    fi
+fi
+[[ -z "$LLAMA_RELEASE" ]] && die "could not resolve release tag — no network and no cached ${BACKEND} build; connect to the network or pin a tag with --release"
 
 # Asset filename on GitHub releases.
 asset_name() {
