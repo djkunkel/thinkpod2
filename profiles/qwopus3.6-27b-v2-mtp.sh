@@ -15,7 +15,7 @@ TEMPLATE="qwen-fixed-chat-template.jinja"
 # Q5_K_M weighs 19.5 GB, leaving ~12.5 GB on 32 GB VRAM for KV cache.
 # --cache-type-k q8_0 halves K-cache memory vs fp16; empirically fits ~120k
 # context on this hardware. No --ctx-size set: llama-server auto-fits to
-# available VRAM. When running via serve.sh (container), pass
+# available VRAM. With a container backend (--cuda/--cuda12), pass
 # `-- --ctx-size 110000` since the container cannot see host VRAM.
 #
 # Sampling params per model card benchmark (temp=1.0, top_p=0.95).

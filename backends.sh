@@ -13,7 +13,7 @@
 # `backends.sh update` to fetch one.
 #
 # Usage:
-#   ./backends.sh update  --<backend> [--release TAG] [--dry-run]
+#   ./backends.sh update  --<backend> [--release TAG] [--dry-run] [--no-mark]
 #   ./backends.sh use     --<backend> --release TAG
 #   ./backends.sh list    [--<backend>]
 #   ./backends.sh prune   [--<backend>] [--keep N] [--dry-run]
@@ -21,7 +21,8 @@
 #
 # Subcommands:
 #   update   Download the latest (or --release TAG) build and mark it current.
-#            For container backends this pulls the image.
+#            For container backends this pulls the image. --no-mark downloads
+#            without changing bin/current (used by run.sh for one-off runs).
 #   use      Mark an already-cached build as current (no download).
 #            Binary backends only.
 #   list     Show cached builds/images and the current selection.
@@ -206,16 +207,26 @@ _state_write() {  # $1 = backend, $2 = value
 
 # ── Container engine ──────────────────────────────────────────────────────────
 
-_detect_engine() {
-    if [[ -z "$ENGINE" ]]; then
-        if command -v podman &>/dev/null; then
-            ENGINE="podman"
-        elif command -v docker &>/dev/null; then
-            ENGINE="docker"
-        else
-            die "neither podman nor docker found"
-        fi
+# Detect a container engine into $ENGINE, returning non-zero (without exiting)
+# if none is available. Used by query paths (list/prune) that must not abort
+# on engine-less hosts.
+_try_engine() {
+    if [[ -n "$ENGINE" ]]; then
+        command -v "$ENGINE" &>/dev/null && return 0 || return 1
     fi
+    if command -v podman &>/dev/null; then
+        ENGINE="podman"
+    elif command -v docker &>/dev/null; then
+        ENGINE="docker"
+    else
+        return 1
+    fi
+}
+
+# Like _try_engine but fatal — for paths that genuinely require an engine
+# (e.g. pulling an image).
+_detect_engine() {
+    _try_engine || die "neither podman nor docker found"
 }
 
 # ── Subcommands ───────────────────────────────────────────────────────────────
@@ -259,9 +270,11 @@ cmd_current() {
     return 1
 }
 
-# update --backend NAME [--release TAG] [--dry-run]
+# update --backend NAME [--release TAG] [--dry-run] [--no-mark]
+# When no_mark is true the build is downloaded but bin/current is left
+# untouched (used by run.sh for one-off --release runs).
 cmd_update() {
-    local backend="$1" release="${2:-}" dry_run="${3:-false}"
+    local backend="$1" release="${2:-}" dry_run="${3:-false}" no_mark="${4:-false}"
 
     if _is_container "$backend"; then
         _detect_engine
@@ -271,8 +284,10 @@ cmd_update() {
         info "pulling image: $img"
         if ! $dry_run; then
             "$ENGINE" pull "$img" || die "image pull failed: $img"
-            _state_write "$backend" "$img"
-            info "current: $backend=$img"
+            if ! $no_mark; then
+                _state_write "$backend" "$img"
+                info "current: $backend=$img"
+            fi
         else
             info "dry-run: skip pull"
         fi
@@ -336,7 +351,7 @@ cmd_update() {
         info "cached at $cache_dir"
     fi
 
-    if ! $dry_run; then
+    if ! $dry_run && ! $no_mark; then
         _state_write "$backend" "$subdir"
         info "current: $backend=$subdir"
     fi
@@ -386,7 +401,7 @@ cmd_list() {
 
     # Container backends: only attempt engine listing if one is available.
     local have_engine=false
-    if _detect_engine 2>/dev/null && command -v "$ENGINE" &>/dev/null; then
+    if _try_engine; then
         have_engine=true
     fi
 
@@ -444,7 +459,7 @@ cmd_prune() {
 
     # Container backends: prune dangling images via the engine.
     if [[ -z "$filter" || "$filter" == "cuda" || "$filter" == "cuda12" ]]; then
-        if _detect_engine 2>/dev/null && command -v "$ENGINE" &>/dev/null; then
+        if _try_engine; then
             if $dry_run; then
                 echo "would run: $ENGINE image prune -f"
             else
@@ -461,6 +476,7 @@ BACKEND=""
 RELEASE=""
 KEEP=0
 DRY_RUN=false
+NO_MARK=false
 
 show_help() {
     sed -n '3,/^set -euo pipefail$/p' "$0" | sed 's/^# \{0,1\}//' | sed '/^set -euo pipefail$/d'
@@ -485,6 +501,7 @@ while [[ $# -gt 0 ]]; do
             [[ -z "${2:-}" ]] && die "--keep requires a number"
             KEEP="$2"; shift 2 ;;
         --dry-run) DRY_RUN=true; shift ;;
+        --no-mark) NO_MARK=true; shift ;;
         --help|-h) show_help; exit 0 ;;
         -*)  die "unknown option: $1 (try --help)" ;;
         *)   die "unexpected argument: $1 (try --help)" ;;
@@ -501,7 +518,7 @@ fi
 
 case "$CMD" in
     current) cmd_current "$BACKEND" "$RELEASE" ;;
-    update)  cmd_update  "$BACKEND" "$RELEASE" "$DRY_RUN" ;;
+    update)  cmd_update  "$BACKEND" "$RELEASE" "$DRY_RUN" "$NO_MARK" ;;
     use)     [[ -z "$RELEASE" ]] && die "use requires --release TAG"
              cmd_use "$BACKEND" "$RELEASE" ;;
     list)    cmd_list "$BACKEND" ;;

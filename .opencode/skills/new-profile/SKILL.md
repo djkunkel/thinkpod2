@@ -189,9 +189,12 @@ llama-server flags can be passed after `--`:
 ./run.sh --rocm --profile <name> -- --ctx-size 110000
 ```
 
-Binary backends download the release automatically on first use and cache it
-under `bin/`. Override the release tag with `--release TAG` or the
-`LLAMA_RELEASE` environment variable.
+Binary backends run a cached llama.cpp build from `bin/`. If nothing is
+cached, `run.sh` asks `backends.sh` to download the latest on first use.
+Manage builds directly with `backends.sh` (`update`/`use`/`list`/`prune`).
+Pin a tag for a single run with `--release TAG` or the `LLAMA_RELEASE`
+environment variable — this does not change the saved default in
+`bin/current`.
 
 Container backends (`--cuda`, `--cuda12`) require podman or docker and pull
 the upstream ghcr.io image. All container runs use `--network host` (required
@@ -211,4 +214,5 @@ Key files:
 ## Reference: key scripts
 
 - `run.sh`                  — unified launcher (binary and container backends)
+- `backends.sh`             — backend lifecycle (update/use/list/prune/current)
 - `scripts/test-context.sh` — needle-in-haystack context window stress test

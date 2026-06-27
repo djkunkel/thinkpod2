@@ -13,9 +13,9 @@ TEMPLATE="qwen-fixed-chat-template.jinja"
 # Passed directly to llama-server; overridable at run time via -- args.
 #
 # Q4_K_M is ~15 GB, leaving ample headroom on 32 GB VRAM for KV cache and mmproj.
-# No --ctx-size set: llama-server auto-fits to available VRAM. When running via
-# serve.sh (container), pass `-- --ctx-size 110000` since the container cannot
-# see host VRAM.
+# No --ctx-size set: llama-server auto-fits to available VRAM. With a container
+# backend (--cuda/--cuda12), pass `-- --ctx-size 110000` since the container
+# cannot see host VRAM.
 #
 # Note: MTP + vision (--mmproj) may not work together depending on your llama.cpp
 # build. If you encounter errors, remove the mmproj from FILES or drop MTP flags.

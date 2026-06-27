@@ -355,8 +355,10 @@ if CACHE_DIR="$(resolve_cache_dir 2>/dev/null)"; then
     :
 else
     if [[ -n "${LLAMA_RELEASE:-}" ]]; then
+        # A pinned --release is a one-off: download it but leave bin/current
+        # (the persistent default) untouched.
         info "release ${LLAMA_RELEASE} not cached — downloading"
-        "$BACKENDS_SH" update --"$BACKEND" --release "$LLAMA_RELEASE"
+        "$BACKENDS_SH" update --"$BACKEND" --release "$LLAMA_RELEASE" --no-mark
     else
         info "no cached ${BACKEND} build — downloading latest"
         "$BACKENDS_SH" update --"$BACKEND"
