@@ -12,8 +12,10 @@ FILES=("Qwen3.6-35B-A3B-UD-Q4_K_M.gguf" "mmproj-F16.gguf")
 # Runtime defaults — native llama-server flags.
 # Passed directly to llama-server; overridable at run time via -- args.
 #
-# Context capped at 131072: native max is 262144 but 32GB VRAM leaves ~10GB
-# for KV cache at UD-Q4_K_M; 131072 keeps that budget comfortable.
+# No --ctx-size set: llama-server auto-fits to available VRAM (native max is
+# 262144; on 32GB this lands well under that, leaving headroom for KV cache at
+# UD-Q4_K_M). With a container backend (--cuda/--cuda12), pass `-- --ctx-size
+# 131072` since the container cannot see host VRAM.
 #
 # Sampling params per official model card (thinking mode, general tasks):
 #   temperature=1.0, top_p=0.95, top_k=20, presence_penalty=1.5
